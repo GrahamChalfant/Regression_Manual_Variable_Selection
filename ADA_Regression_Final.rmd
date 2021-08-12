@@ -52,9 +52,8 @@ as.data.frame(prop.table(sum_table$n))
 ```
 
 
-# Research Design
 
-Outliers - Boxplots
+## Outliers - Boxplots
 ```{r}
 independent <- data
 independent$LeagueIndex <- NULL
@@ -180,7 +179,7 @@ ggplot(vif_check, aes(x = variable, y = VIF)) + geom_point()+ theme(axis.text.x 
 
 ```
 
-## Linearity - scatter plots - I plotted residuals, that ok? 
+## Linearity - scatter plots 
 ```{r}
 #mod_list <- list()  
 #loop to store all lm models of LeagueIndex in list mod_list
@@ -232,14 +231,6 @@ for(i in 2:length(data_1)) {
 
 ```
 
-
-## P-P plots
-```{r}
-qqnorm(data_1$TotalHours, pch = 1, frame = FALSE)
-qqline(data_1$TotalHours, col = "steelblue", lwd = 2)
-
-
-```
 
 # Estimating and Assessing Model Fit
 
@@ -388,45 +379,6 @@ ggplot(adj_rsquared_sum, aes(x = variable_added, y = adjusted_rsquared)) +
 
 ```
 
-Extracting P-values (significance)
-```{r}
-mod_p_value <- matrix()
-
-for (i in 1:length(mod_summaries)) {
-  
-  mod_p_value[i] <- print(paste(mod_summaries[[i]]$coefficients[2,4], mod_summaries[[i]]$terms[[3]]))
-  #this removes age, need to fix
-}
-
-
-p_value_summaries <- as.data.frame(mod_p_value)
-
-colnames(p_value_summaries) <- "p_value"
-
-p_value_summaries%>%
-separate(p_value, sep = " ", into=c("p_value","variables")) -> p_value_summaries# separating into 2 columns
-
-
-p_value_desc <- p_value_summaries %>% arrange(p_value_summaries)
-p_value_desc
-
-#output is the same as r-squared
-```
-
-Plotting P-values: Solution to small number: p-value and r-squared and very correlated in this situation so we visualised r_squared becasue it was much easier 
-```{r}
-
-p_value_desc$p_value <- format(p_value_desc$p_value, scientific = TRUE)
-
-p_value_desc$p_value
-
-#p_value_desc$p_value <- as.numeric(p_value_desc$p_value)
-
-#ggplot(p_value_desc, aes(x = reorder(variables, +p_value), y = p_value)) + geom_point() + theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
-
-
-```
-
 Common Varaince 
 ```{r}
 
@@ -435,10 +387,9 @@ for (i in data_1) {
   box_plot <- ggplot(data_1, aes(x = i)) + geom_boxplot() +facet_wrap(data_1$LeagueIndex) + coord_flip() + labs(title = i)
   print(box_plot)
 
-  
 }
-
 ```
+
 
 ```{r}
 independent <- data_1
