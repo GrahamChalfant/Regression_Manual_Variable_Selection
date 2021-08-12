@@ -1,0 +1,540 @@
+---
+title: "ADA_Assignment_Final"
+author: "Graham Chalfant"
+date: "3/8/2021"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(reshape2)
+library(jtools)
+library(caret)
+library(xlsx)
+library(scales)
+library(broom)
+library(gridExtra)
+options(scipen=999)
+```
+
+
+# Data Preperation 
+
+```{r}
+
+data <- read.xlsx("SkillCraft_Dataset.xlsm", 1, header = TRUE)
+
+# data <- read.csv("SkillCraft_Dataset.csv", stringsAsFactors = TRUE)
+
+# drop irrelavant GameID column
+
+data_gameID <- data$GameID
+data$GameID <- NULL
+str(data)
+
+# Change TotalHours to Integer
+data$TotalHours <- as.integer(data$TotalHours)
+data$LeagueIndex[which(is.na(data$TotalHours))]
+league_5 <- data %>% filter(LeagueIndex == 5)
+
+# One NA exists in TotalHours. Use TotalHours mean to replace it.
+data_1 <- data %>%
+  mutate(TotalHours = replace(TotalHours,
+                                  is.na(TotalHours),
+                                  mean(league_5$TotalHours, na.rm = TRUE)))
+#replace it with group mean.
+
+
+#Sample Proportions
+
+sum_table <- data_1 %>% group_by(LeagueIndex) %>% count(LeagueIndex)
+as.data.frame(prop.table(sum_table$n))
+```
+
+
+# Research Design
+
+Outliers - Boxplots
+```{r}
+independent <- data
+independent$LeagueIndex <- NULL
+independent <- as.data.frame(independent)
+
+for (i in independent) {
+  
+  print(boxplot(i))
+  
+}
+```
+
+## Outliers - Mahalanobis 
+```{r}
+#Outlier Detection with Mahalanobis Distance 
+
+# Calculate Mahalanobis with predictor variables
+data_2 <- data_1[, -1]    # Remove LeagueIndex Variable
+m_dist <- mahalanobis(data_2, colMeans(data_2), cov(data_2))
+data_2$MD <- round(m_dist, 1)
+# Binary Outlier Variable
+# Rule of Thumbs
+for (i in 1: nrow(data_2)){
+  if (data_2$MD[i] / 17 > 4) {
+    data_2$outlier[i] = "Yes"
+  }
+  else{
+    data_2$outlier[i] = "No"
+  }
+}
+
+#Creating column for MD divided by DF (17)
+data_2 <- data_2 %>% mutate(MD_DF = MD / 17)
+
+data_2$GameID <- data_gameID
+
+highlight_MD_DF <- data_2 %>% filter(MD_DF >= 4)
+
+ggplot(data_2, aes(x = GameID, y = MD_DF)) + 
+  geom_point() + 
+  geom_point(data = highlight_MD_DF, aes(x = GameID, y = MD_DF), color = 'red') +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+ labs(x = "GameID", y = "Mahalanobis Distance", title = "Outlier Detection With Mahalanobis Distance") + geom_hline(yintercept = 4, color = "blue")+ geom_text(aes(label=ifelse(MD_DF>4,as.character(GameID),'')),hjust=-.5,vjust=0, size = 3)
+
+# We have 13 potential outliers in the dataset.
+outlier_no <- which(data_2$outlier == "Yes")
+outliers_info <- data_2 %>% filter(outlier == "Yes") 
+
+# Remove Outliers and save as a new csv file.
+data_prepared <- data_1 %>% slice(-outlier_no)
+write.csv(data_prepared, "data_prepared.csv", row.names = FALSE)
+
+#mean(data$TotalHours, na.rm = TRUE)
+#mean(league_5$TotalHours, na.rm = TRUE)
+
+#ggsave("mahalnobis_distance.png")
+```
+
+
+
+# Assumptions
+
+## Multicollinearity
+```{r}
+cordata <- round(cor(data_1),2)
+head(cordata)
+
+melted_data <- melt(cordata)
+head(melted_data)
+
+ get_upper_tri <- function(cordata){
+    cordata[lower.tri(cordata)]<- NA
+    return(cordata)
+ }
+ 
+upper_tri <- get_upper_tri(cordata)
+ 
+melted_data <- melt(upper_tri, na.rm = TRUE)
+
+ggplot(data = melted_data, aes(Var2, Var1, fill = value))+
+ geom_tile(color = "white")+
+ scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab", 
+   name="Pearson\nCorrelation") +
+  theme_minimal()+ 
+ theme(axis.text.x = element_text(angle = 45, hjust = 1,))+ 
+  theme(axis.title.x = element_blank(), axis.title.y = element_blank())+
+ geom_text(aes(Var2, Var1, label = value), color = "black", size = 2)+
+  labs(title = "Multicollinearity Check Using Pearson Correlation Coefficient")
+
+#ggsave("multicollinearity.png")
+
+```
+
+## Multicollinearity - VIF
+```{r}
+#Caclulating VIF for each varaibel
+
+model1 <- lm(LeagueIndex ~., data = data_1)
+summary(model1)
+car::vif(model1)
+vif_check_apm <- as.data.frame(car::vif(model1))
+vif_check_apm$variable <- c("Age", "HoursPerWeek", "TotalHours", "APM", "SelectByHotkeys", "AssignToHotkeys", "UniqueHotkeys", "MinimapAttacks", "MinimapRightClicks", "NumberOfPACs", "GapBetweenPACs", "ActionLatency", "ActionsInPAC", "TotalMapExplored", "WorkersMade", "UniqueUnitsMade", "ComplexUnitsMade", "ComplexAbilitiesUsed")
+
+colnames(vif_check_apm) <- c("VIF", "variable")
+
+highlight_vif <- vif_check_apm %>% filter(VIF >= 10)
+
+ggplot(vif_check_apm, aes(x = variable, y = VIF)) + 
+  geom_point() + 
+  geom_point(data = highlight_vif, aes(x = variable, y = VIF), color = 'red') +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+ labs(x = "Variables", y = "Variance Inflation Factor", title = "Variance Inflation Factor by Variable") + geom_hline(yintercept = 10, color = "blue")
+
+#Removing APM and recalculating all VIF
+
+model2 <- lm(LeagueIndex ~. -APM, data = data_1)
+summary(model2)
+vif_check <- as.data.frame(car::vif(model2))
+vif_check$variable <- c("Age", "HoursPerWeek", "TotalHours", "SelectByHotkeys", "AssignToHotkeys", "UniqueHotkeys", "MinimapAttacks", "MinimapRightClicks", "NumberOfPACs", "GapBetweenPACs", "ActionLatency", "ActionsInPAC", "TotalMapExplored", "WorkersMade", "UniqueUnitsMade", "ComplexUnitsMade", "ComplexAbilitiesUsed")
+
+colnames(vif_check) <- c("VIF", "variable")
+
+ggplot(vif_check, aes(x = variable, y = VIF)) + geom_point()+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+ labs(x = "Variables", y = "Variance Inflation Factor", title = "Variance Inflation Factor by Variable without APM")
+
+```
+
+## Linearity - scatter plots - I plotted residuals, that ok? 
+```{r}
+#mod_list <- list()  
+#loop to store all lm models of LeagueIndex in list mod_list
+#for(i in 2:ncol(data)) {                 
+ 
+  #predictors_i <- colnames(data)[i]    # Create vector of predictor names
+  #mod_list[[i - 1]] <- lm(LeagueIndex ~ ., data[ , c("LeagueIndex", #predictors_i)])
+#}
+
+
+#loop to show residuals of simple linear regressions with league index
+#for(i in 2:length(mod_list)) {    #loop to print the residuals vs fitted plots (linearity: should be a horizonital line close to 0)             
+  #print(plot(mod_list[[i]], 1)) #need to add titles
+#}
+
+
+#http://www.sthda.com/english/articles/39-regression-model-diagnostics/161-linear-regression-assumptions-and-diagnostics-in-r-essentials/
+
+
+#For loop that plots all variables against leagueindex in a scatter plot
+for(i in 2:length(data_1)) {
+  
+  plots <- ggplot(data_1, aes(x = LeagueIndex, y = data_1[ ,i])) + geom_point()+geom_smooth()+labs(x = "leagueIndex", y = colnames(data_1[i]), title = paste("Scatter Plot of LeagueIndex and", colnames(data_1[i])))
+  print(plots)  
+} 
+
+ggplot(data_1, aes(x = LeagueIndex, y = AssignToHotkeys)) + geom_point()+ geom_smooth()
+
+ggplot(data_1, aes(x = LeagueIndex, y = log10(AssignToHotkeys))) + geom_point()+ geom_smooth()
+
+
+
+
+```
+
+
+## Homoscedatisity with boxplots
+```{r}
+for(i in 2:length(data_1)) {
+  
+  box_plots <- ggplot(data_1, aes(y = data_1[ ,i])) + geom_boxplot()+
+    facet_grid(col = vars(data_1$LeagueIndex))+
+    labs(y = colnames(data_1[i]), y = colnames(data_1[i]), title = paste("Box Plots of", colnames(data_1[i]), "by LeagueIndex"))+
+    theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+  print(box_plots)  
+} 
+
+```
+
+
+## P-P plots
+```{r}
+qqnorm(data_1$TotalHours, pch = 1, frame = FALSE)
+qqline(data_1$TotalHours, col = "steelblue", lwd = 2)
+
+
+```
+
+# Estimating and Assessing Model Fit
+
+## Select predictor variables (R-squared and Sig - she prefers sig)
+```{r}
+
+mod_summaries <- list()  
+
+for(i in 2:ncol(data)) {                 # Head of for-loop
+ 
+  predictors_i <- colnames(data)[i]    # Create vector of predictor names
+  mod_summaries[[i - 1]] <- summary(     # Store regression model summary in list
+    lm(LeagueIndex ~ ., data[ , c("LeagueIndex", predictors_i)]))
+ 
+}
+
+mod_summaries #list containing lm for each varaible
+
+
+# Code to extract output form list in order to show P-values nd R-squared of each model
+
+#print(paste(mod_summaries[[1]]$r.squared, mod_summaries[[1]]$terms[[3]]))
+
+rsquared_summaries <- matrix()
+
+for (i in 1:length(mod_summaries)) {
+  
+  rsquared_summaries[i] <- print(paste(mod_summaries[[i]]$r.squared, mod_summaries[[i]]$terms[[3]]))
+  #this removes age, need to fix
+}
+
+
+rsquared_summaries <- as.data.frame(rsquared_summaries)
+
+colnames(rsquared_summaries) <- "adjusted_rsquared"
+
+rsquared_summaries%>%
+separate(adjusted_rsquared, sep = " ", into=c("adjusted_rsquared","variables")) -> rsquared_summaries# separating into 2 columns
+
+
+rsquared_desc <- rsquared_summaries %>% arrange(desc(adjusted_rsquared)) #arranging r-squared in descending order
+rsquared_desc
+#Need help rounding
+#rsquared_desc$adjusted_rsquared <- round(rsquared_desc$adjusted_rsquared, digits = 2)
+
+```
+
+Plot of each variables adjusted r-squared
+```{r}
+rsquared_desc$adjusted_rsquared <- as.numeric(rsquared_desc$adjusted_rsquared)
+
+ggplot(rsquared_desc, aes(x = reorder(variables, -adjusted_rsquared), y = adjusted_rsquared)) + geom_point() + theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) + scale_y_continuous(breaks = c(.0, .1, .2, .3, .4, .5, .6), limits = c(.01, .6), labels = scales::percent) + labs(y = "R-squared", x = "Variables", title = "R-squared By Variable")
+
+#ggsave("rsquared_by_variable.png")
+
+```
+
+
+
+rearanging data in order of r-squared decending 
+```{r}
+rsquared_order <- data[rsquared_desc$variables]
+
+rsquared_order <- cbind(LeagueIndex = data$LeagueIndex, rsquared_order)
+
+rsquared_order
+
+```
+
+
+
+Multiple Linear Regression with results showing how R-squared changes as more variables are added
+```{r}
+
+# Need data arranged in P-value decending from above in order to make this work 
+
+
+
+mod_summaries_add <- list()  
+
+for(i in 2:ncol(rsquared_order)) {                 # Head of for-loop
+ 
+  predictors_i <- colnames(rsquared_order)[2:i]    # Create vector of predictor names
+  mod_summaries_add[[i - 1]] <- summary(     # Store regression model summary in list
+    lm(LeagueIndex ~ ., rsquared_order[ , c("LeagueIndex", predictors_i)]))
+ 
+}
+
+mod_summaries_add 
+
+
+
+adj_rsquared_add_sum <- matrix()
+
+for (i in 1:length(mod_summaries_add)) {
+  
+  adj_rsquared_add_sum[i - 1] <- print(mod_summaries_add[[i]]$adj.r.squared)
+  #this removes age, need to fix
+}
+
+
+adj_rsquared_add_sum #Adjusted r squared of lm models that adds a the variable with the next highest r_squared
+
+#only shows the results from 17 models when there should be 18
+
+
+asj_rquared_sum_summary <- as.data.frame(adj_rsquared_add_sum)
+
+colnames(asj_rquared_sum_summary) <- "adjusted_rsquared"
+
+
+sum_model_rownames <- colnames(rsquared_order)
+
+sum_model_rownames <- sum_model_rownames[-1]
+
+
+adj_rsquared_sum <- as.data.frame(cbind(sum_model_rownames, adj_rsquared_add_sum))
+
+colnames(adj_rsquared_sum) <- c("variable_added", "adjusted_rsquared")
+
+
+adj_rsquared_sum
+
+```
+
+
+Adjusted R-squared as additional variables are added
+```{r}
+
+#adj_rsquared_sum$variable_added <- as.character(adj_rsquared_sum$variable_added) #convert to character
+
+#adj_rsquared_sum$variable_added <- factor(adj_rsquared_sum$variable_added, levels = unique(adj_rsquared_sum$variable_added)) #Convert to factor to change the order of the x axis 
+
+adj_rsquared_sum$adjusted_rsquared <- as.numeric(adj_rsquared_sum$adjusted_rsquared)
+
+ggplot(adj_rsquared_sum, aes(x = variable_added, y = adjusted_rsquared)) + 
+  geom_point() + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) + 
+  scale_y_continuous(breaks = c(.57, .58, .59, .6, .61, .62, .63, .64, .65, .66), limits = c(.585, .655), labels = scales::percent)+
+  scale_x_discrete(limits = adj_rsquared_sum$variable_added)+
+  labs(title = "LM Adjusted R-sqaured As Variables Are Added According To R-squared", x = "Variable", y = "Adjusted R-squared")
+
+
+
+#ggsave("multiple_lm_rsquared.png")
+
+```
+
+Extracting P-values (significance)
+```{r}
+mod_p_value <- matrix()
+
+for (i in 1:length(mod_summaries)) {
+  
+  mod_p_value[i] <- print(paste(mod_summaries[[i]]$coefficients[2,4], mod_summaries[[i]]$terms[[3]]))
+  #this removes age, need to fix
+}
+
+
+p_value_summaries <- as.data.frame(mod_p_value)
+
+colnames(p_value_summaries) <- "p_value"
+
+p_value_summaries%>%
+separate(p_value, sep = " ", into=c("p_value","variables")) -> p_value_summaries# separating into 2 columns
+
+
+p_value_desc <- p_value_summaries %>% arrange(p_value_summaries)
+p_value_desc
+
+#output is the same as r-squared
+```
+
+Plotting P-values: Solution to small number: p-value and r-squared and very correlated in this situation so we visualised r_squared becasue it was much easier 
+```{r}
+
+p_value_desc$p_value <- format(p_value_desc$p_value, scientific = TRUE)
+
+p_value_desc$p_value
+
+#p_value_desc$p_value <- as.numeric(p_value_desc$p_value)
+
+#ggplot(p_value_desc, aes(x = reorder(variables, +p_value), y = p_value)) + geom_point() + theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+
+
+```
+
+Common Varaince 
+```{r}
+
+for (i in data_1) {
+  
+  box_plot <- ggplot(data_1, aes(x = i)) + geom_boxplot() +facet_wrap(data_1$LeagueIndex) + coord_flip() + labs(title = i)
+  print(box_plot)
+
+  
+}
+
+```
+
+```{r}
+independent <- data_1
+independent$LeagueIndex <- NULL
+independent <- as.data.frame(independent)
+
+model <- lm(Age ~ . -Age, data = independent)
+mod <- summary(model)
+
+model_1 <- lm(HoursPerWeek ~ . -HoursPerWeek, data = independent)
+mod_1 <- summary(model_1)
+
+model_2 <- lm(TotalHours ~ . -TotalHours, data = independent)
+mod_2 <-summary(model_2)
+
+model_3 <- lm(APM ~ . -APM, data = independent)
+mod_3 <-summary(model_3)
+
+model_4 <- lm(SelectByHotkeys ~ . -SelectByHotkeys, data = independent)
+mod_4 <-summary(model_4)
+
+model_5 <- lm(AssignToHotkeys ~ . -AssignToHotkeys, data = independent)
+mod_5 <-summary(model_5)
+
+model_6 <- lm(UniqueHotkeys ~ . -UniqueHotkeys, data = independent)
+mod_6 <-summary(model_6)
+
+model_7 <- lm(MinimapAttacks ~ . -MinimapAttacks, data = independent)
+mod_7 <-summary(model_7)
+
+model_8 <- lm(MinimapRightClicks ~ . -MinimapRightClicks, data = independent)
+mod_8 <-summary(model_8)
+
+model_9 <- lm(NumberOfPACs ~ . -NumberOfPACs, data = independent)
+mod_9 <-summary(model_9)
+
+model_10 <- lm(GapBetweenPACs ~ . -GapBetweenPACs, data = independent)
+mod_10 <-summary(model_10)
+
+model_11 <- lm(ActionLatency ~ . -ActionLatency, data = independent)
+mod_11 <-summary(model_11)
+
+model_12 <- lm(ActionsInPAC ~ . -ActionsInPAC, data = independent)
+mod_12 <-summary(model_12)
+
+model_13 <- lm(TotalMapExplored ~ . -TotalMapExplored, data = independent)
+mod_13 <-summary(model_13)
+
+model_14 <- lm(WorkersMade ~ . -WorkersMade, data = independent)
+mod_14 <-summary(model_14)
+
+model_15 <- lm(UniqueUnitsMade ~ . -UniqueUnitsMade, data = independent)
+mod_15 <-summary(model_15)
+
+model_16 <- lm(ComplexUnitsMade ~ . -ComplexUnitsMade, data = independent)
+mod_16 <-summary(model_16)
+
+model_17 <- lm(ComplexAbilitiesUsed ~ . -ComplexAbilitiesUsed, data = independent)
+mod_17 <-summary(model_17)
+
+
+mod_summaries_ill <- list(mod, mod_1, mod_2, mod_3, mod_4, mod_5, mod_6, mod_7, mod_8, mod_9, mod_10, mod_11, mod_12, mod_13, mod_14, mod_15, mod_16, mod_17)
+
+mod_summaries_ill
+
+
+adj_rsquared_ill <- matrix()
+
+for (i in 1:length(mod_summaries_ill)) {
+  
+  adj_rsquared_ill[i - 1] <- print(paste(mod_summaries_ill[[i]]$call$formula[[2]], mod_summaries_ill[[i]]$adj.r.squared))
+
+  }
+  
+adj_rsquared_ill <- as.data.frame(adj_rsquared_ill)
+
+colnames(adj_rsquared_ill) <- "variable"
+
+adj_rsquared_ill%>%
+  separate(variable, sep = " ", into=c("variable","adj_rsquared")) -> ill_condition_summary# separating into 2 columns
+  
+ill_condition_summary
+
+
+
+ill_condition_summary$adj_rsquared <- as.numeric(ill_condition_summary$adj_rsquared)
+
+
+highlight_ill <- ill_condition_summary %>% filter(adj_rsquared >= .9)
+
+ggplot(ill_condition_summary, aes(x = variable, y = adj_rsquared)) + 
+  geom_point() + 
+  geom_point(data = highlight_ill, aes(x = variable, y = adj_rsquared), color = 'red') +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+ labs(x = "Variables", y = "Adjusted R-squared", title = "Ill-Condition Test Using Adjusted R-squared") + geom_hline(yintercept = .90, color = "blue") + 
+  scale_y_continuous(breaks = c(.10, .2, .3, .4, .5, .6, .7, .8, .9, 1), limits = c(.1, 1))
+
+#ggsave("ill-condition.png")
+```
+
