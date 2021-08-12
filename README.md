@@ -1,4 +1,4 @@
-# data_management_project
-This is the final project I completed for my master's module Data Management
+# Advanced Data Analysis Project: Regression Variable Selection
+This is the final project I completed for my master's module Advanced Data Analysis
 
-Below, the relational schema and code to create our database can be seen.  
+
